@@ -1,14 +1,14 @@
 #include "mbed.h"
+#include <iomanip>
+#include "math.h"
 #include "mbed_rpc.h"
 #include "uLCD_4DGL.h"
 #include "MQTTNetwork.h"
 #include "MQTTmbed.h"
 #include "MQTTClient.h"
-#include "TextLCD.h"
 #include "accelerometer_handler.h"
 #include "config.h"
 #include "magic_wand_model_data.h"
-
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/micro/kernels/micro_ops.h"
 #include "tensorflow/lite/micro/micro_error_reporter.h"
@@ -36,13 +36,13 @@ DigitalOut myled2(LED2);
 DigitalOut myled3(LED3);
 int Count = 0;
 int ThresholdCount = 10;
-int off = 1;
-int off2 = 1;
-double val = 0;
+int stop1 = 1;
+int stop2 = 1;
+double value = 0;
 int idR[32] = {0};
 int indexR = 0;
 //int gesture_index;
-int c = 0, angle = 0;
+int confirm = 0, angle = 0;
 constexpr int kTensorArenaSize = 60 * 1024;
 uint8_t tensor_arena[kTensorArenaSize];
 MQTT::Client<MQTTNetwork, Countdown> *rpcclient;
@@ -54,57 +54,17 @@ const char* topic = "Mbed";
 
 Thread mqtt_thread(osPriorityHigh);
 EventQueue mqtt_queue;
-// I2C Communication
-I2C i2c_lcd(D14,D15); // SDA, SCL
-
-TextLCD_I2C lcd(&i2c_lcd, 0x4E, TextLCD::LCD16x2);  // I2C bus, PCF8574 Slaveaddress, LCD Type
-
-
-int main() {
-    //The mbed RPC classes are now wrapped to create an RPC enabled version - see RpcClasses.h so don't add to base class
-    // receive commands, and send back the responses
-    lcd.setCursor(TextLCD::CurOff_BlkOn);
-    BSP_ACCELERO_Init();
-    char buf[256], outbuf[256];
-
-    FILE *devin = fdopen(&pc, "r");
-    FILE *devout = fdopen(&pc, "w");
-    t.start(callback(&queue, &EventQueue::dispatch_forever));
-    queue.call(mqtt);
-    while(1) {
-        memset(buf, 0, 256);
-        for (int i = 0; ; i++) {
-            char recv = fgetc(devin);
-            if (recv == '\n') {
-                printf("\r\n");
-                break;
-            }
-            buf[i] = fputc(recv, devout);
-        }
-        //Call the static call method on the RPC class
-        RPC::call(buf, outbuf);
-        printf("%s\r\n", outbuf);
-    }
-}
-
-void led() {
-    while (off2) {
-    myled=!myled;
-    ThisThread::sleep_for(500ms);
-    }
-}
 
 void Confirm_print() {
     uLCD.cls();
-    printf("\nConfirm ! %d\n", c);
+    printf("\nConfirm ! %d\n", confirm);
     uLCD.printf("\nConfirm! ! !\n");
     uLCD.printf("\nFinal Threshold angle = %d\n",angle );
     myled = 0;
 }
 
 void Confirm_angle() {
-    c = 1;
-    //printf("c = %d", c);
+    confirm = 1;
     mqtt_queue.call(&Confirm_print);
 }
 
@@ -275,8 +235,7 @@ void angle_select() {
             }
         }
 
-        if (c == 1) {
-        //printf("hello");
+        if (confirm == 1) {
         mqtt_queue.call(&publish_message, rpcclient);
         return;
         }
@@ -293,15 +252,14 @@ void messageArrived(MQTT::MessageData& md) {
     sprintf(payload, "Payload %.*s\r\n", message.payloadlen, (char*)message.payload);
     printf(payload);
     ++arrivedcount;
-    if (c == 1) {
-        off2 = 0; 
+    if (confirm == 1) {
+        stop1 = 0; 
         printf("Confirm angle");
-        c = 0;
-        queue.call(led);
+        confirm = 0;
     }
     if (Count > ThresholdCount) {
         Count = 0;
-        off = 0;
+        stop2 = 0;
     }
 }
 
@@ -360,10 +318,6 @@ void mqtt() {
 
     mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
     
-    //sw0.rise(mqtt_queue.event(&Confirm_angle));
-    //sw0.rise(mqtt_queue.event(&publish_message, &client));
-    //btn3.rise(&close_mqtt);
-
     int num = 0;
     while (num != 5) {
             client.yield(100);
@@ -394,15 +348,15 @@ void mqtt() {
 void record(void) {
     //double val;
     BSP_ACCELERO_AccGetXYZ(PDataXYZ);
-    val = PDataXYZ[0]*rDataXYZ[0] + PDataXYZ[1]*rDataXYZ[1] + PDataXYZ[2]*rDataXYZ[2];
-    val = val / sqrt(PDataXYZ[0]*PDataXYZ[0] + PDataXYZ[1]*PDataXYZ[1] + PDataXYZ[2]*PDataXYZ[2]);
-    val = val / sqrt(rDataXYZ[0]*rDataXYZ[0] + rDataXYZ[1]*rDataXYZ[1] + rDataXYZ[2]*rDataXYZ[2]);
-    val = acos(val);
-    val = val/ M_PI * 180;
+    value = PDataXYZ[0]*rDataXYZ[0] + PDataXYZ[1]*rDataXYZ[1] + PDataXYZ[2]*rDataXYZ[2];
+    value = value / sqrt(PDataXYZ[0]*PDataXYZ[0] + PDataXYZ[1]*PDataXYZ[1] + PDataXYZ[2]*PDataXYZ[2]);
+    value = value / sqrt(rDataXYZ[0]*rDataXYZ[0] + rDataXYZ[1]*rDataXYZ[1] + rDataXYZ[2]*rDataXYZ[2]);
+    value = acos(value);
+    value = value/ M_PI * 180;
     uLCD.cls();
-    uLCD.printf("angle = %g  %d, %d, %d\n", val, PDataXYZ[0], PDataXYZ[1], PDataXYZ[2]);
-    if (val > angle) {
-        printf("angle = %g  %d, %d, %d\n", val, PDataXYZ[0], PDataXYZ[1], PDataXYZ[2]);
+    uLCD.printf("angle = %g  %d, %d, %d\n", value, PDataXYZ[0], PDataXYZ[1], PDataXYZ[2]);
+    if (value > angle) {
+        printf("angle = %g  %d, %d, %d\n", value, PDataXYZ[0], PDataXYZ[1], PDataXYZ[2]);
         mqtt_queue.call(&publish_message, rpcclient);
         Count = Count + 1;
     }
@@ -419,17 +373,17 @@ void tilt(Arguments *in, Reply *out) {
     printf("Tilt mode");
     myled2 = 1;
     myled3 = 0;
-    off = 1;
-    c = 0;
+    stop2 = 1;
+    confirm = 0;
     sw0.rise(&Confirm_angle);
-    while (c == 0) {
+    while (confirm == 0) {
         myled3 = !myled3;
         idR[indexR++] = mqtt_queue.call(initialize);
         indexR = indexR % 32;
         ThisThread::sleep_for(100ms);
     }
     myled3 = 0;
-    while (off) {
+    while (stop2) {
         idR[indexR++] = mqtt_queue.call(record);
         indexR = indexR % 32;
         ThisThread::sleep_for(100ms);
@@ -439,18 +393,36 @@ void tilt(Arguments *in, Reply *out) {
 void gestureUI(Arguments *in, Reply *out) {
    //const char *tmp = in->getArg<const char*>();
    myled = 1;
-   off2 = 1;
+   stop1 = 1;
    printf("GESTURE MODE");
-   c = 0;
+   confirm = 0;
    mqtt_queue.call(angle_select);
-   //for(int i = 0; tmp[i] != 0; i++) {
-     // lcd.putc(tmp[i]);
-   //}
 }
 
-/*void doLocate(Arguments *in, Reply *out) {
-   int x = in->getArg<int>();
-   int y = in->getArg<int>();
-   lcd.locate(x,y);
-   printf("locate (col,row)=(%d,%d)", x, y);
-}*/
+int main() {
+    //The mbed RPC classes are now wrapped to create an RPC enabled version - see RpcClasses.h so don't add to base class
+    // receive commands, and send back the responses
+    
+    // lcd.setCursor(TextLCD::CurOff_BlkOn);
+    BSP_ACCELERO_Init();
+    char buf[256], outbuf[256];
+
+    FILE *devin = fdopen(&pc, "r");
+    FILE *devout = fdopen(&pc, "w");
+    t.start(callback(&queue, &EventQueue::dispatch_forever));
+    queue.call(mqtt);
+    while(1) {
+        memset(buf, 0, 256);
+        for (int i = 0; ; i++) {
+            char recv = fgetc(devin);
+            if (recv == '\n') {
+                printf("\r\n");
+                break;
+            }
+            buf[i] = fputc(recv, devout);
+        }
+        //Call the static call method on the RPC class
+        RPC::call(buf, outbuf);
+        printf("%s\r\n", outbuf);
+    }
+}
